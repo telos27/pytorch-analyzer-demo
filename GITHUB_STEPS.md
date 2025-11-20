@@ -1,6 +1,10 @@
 # GitHub Steps - Quick Reference
 
+**✅ TESTED AND WORKING** - Last verified: 2025-11-20
+
 **You need to do 6 things on GitHub. Follow in order.**
+
+📖 **Need help?** See [TROUBLESHOOTING.md](TROUBLESHOOTING.md) for common issues.
 
 ---
 

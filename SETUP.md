@@ -1,6 +1,20 @@
 # Setup Guide - PyTorch Bug Detector Demo
 
+**✅ TESTED AND WORKING** - Last verified: 2025-11-20
+
 This demo uses a **private analyzer repo** + **public test repo** to keep the analyzer code private.
+
+## Quick Links
+
+- **Quick Start:** [GITHUB_STEPS.md](GITHUB_STEPS.md) - 6-step checklist
+- **Troubleshooting:** [TROUBLESHOOTING.md](TROUBLESHOOTING.md) - Common issues and fixes
+- **This Guide:** Complete setup with explanations
+
+---
+
+## Important Notes
+
+⚠️ **Ubuntu 22.04 Required:** The workflow uses `ubuntu-22.04` (not `ubuntu-latest`) because Souffle requires `libffi7`, which is only available in Ubuntu 22.04. See [TROUBLESHOOTING.md](TROUBLESHOOTING.md#error-depends-libffi7-but-it-is-not-installable) for details.
 
 ---
 

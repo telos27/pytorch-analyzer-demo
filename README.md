@@ -1,8 +1,16 @@
 # PyTorch Bug Detector - Demo
 
+**✅ TESTED AND WORKING** - Successfully detecting PyTorch bugs on PRs!
+
 This is a **public demo repository** for testing the PyTorch Bug Detector GitHub Action.
 
 ⚠️ **Note:** This repo contains only test files. The analyzer code is in a private repository.
+
+## Documentation
+
+- 📋 [GITHUB_STEPS.md](GITHUB_STEPS.md) - Quick 6-step setup guide
+- 📖 [SETUP.md](SETUP.md) - Detailed setup instructions
+- 🔧 [TROUBLESHOOTING.md](TROUBLESHOOTING.md) - Common issues and solutions
 
 ## What This Demo Does
 
