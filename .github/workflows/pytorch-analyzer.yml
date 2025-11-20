@@ -1,0 +1,222 @@
+name: PyTorch Bug Detector
+
+on:
+  pull_request:
+    paths:
+      - '**.py'
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: Checkout public repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Clone private analyzer repo
+        run: |
+          git clone https://x-access-token:${{ secrets.ANALYZER_TOKEN }}@github.com/${{ secrets.ANALYZER_REPO }}.git analyzer
+        env:
+          ANALYZER_TOKEN: ${{ secrets.ANALYZER_TOKEN }}
+          ANALYZER_REPO: ${{ secrets.ANALYZER_REPO }}
+
+      - name: Install Souffle
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y souffle
+
+      - name: Install Python dependencies
+        run: |
+          cd analyzer
+          pip install -r requirements.txt
+
+      - name: Get changed Python files
+        id: changed-files
+        run: |
+          # Get list of changed .py files in this PR (from public repo)
+          CHANGED_FILES=$(git diff --name-only --diff-filter=ACMRT ${{ github.event.pull_request.base.sha }} ${{ github.sha }} | grep '\.py$' || true)
+          echo "files<<EOF" >> $GITHUB_OUTPUT
+          echo "$CHANGED_FILES" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+          # Count files
+          if [ -z "$CHANGED_FILES" ]; then
+            echo "count=0" >> $GITHUB_OUTPUT
+          else
+            echo "count=$(echo "$CHANGED_FILES" | wc -l)" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Run PyTorch Bug Detector
+        id: analyze
+        if: steps.changed-files.outputs.count != '0'
+        run: |
+          # Create output directory
+          mkdir -p analysis_output
+
+          # Initialize combined report
+          echo '{"summary": {}, "bugs": []}' > analysis_output/bug_report.json
+
+          # Analyze each changed file
+          ALL_BUGS="[]"
+          TOTAL_ERRORS=0
+          TOTAL_WARNINGS=0
+          FILES_ANALYZED=0
+
+          while IFS= read -r file; do
+            if [ -n "$file" ] && [ -f "$file" ]; then
+              echo "Analyzing: $file"
+              FILES_ANALYZED=$((FILES_ANALYZED + 1))
+
+              # Run analyzer from the private repo directory
+              RESULT=$(cd analyzer && python cli_bug_detector.py "../$file" --json 2>/dev/null || echo '{"bugs": [], "warnings": []}')
+
+              # Extract bugs and add file path
+              BUGS=$(echo "$RESULT" | python3 -c "
+          import sys, json
+          try:
+              data = json.load(sys.stdin)
+              bugs = data.get('bugs', [])
+              warnings = data.get('warnings', [])
+              all_issues = []
+              for b in bugs:
+                  b['file'] = '$file'
+                  b['severity'] = 'error'
+                  all_issues.append(b)
+              for w in warnings:
+                  w['file'] = '$file'
+                  w['severity'] = 'warning'
+                  all_issues.append(w)
+              print(json.dumps(all_issues))
+          except:
+              print('[]')
+          ")
+
+              # Count issues
+              NUM_ERRORS=$(echo "$RESULT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d.get('bugs',[])))" 2>/dev/null || echo "0")
+              NUM_WARNINGS=$(echo "$RESULT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d.get('warnings',[])))" 2>/dev/null || echo "0")
+
+              TOTAL_ERRORS=$((TOTAL_ERRORS + NUM_ERRORS))
+              TOTAL_WARNINGS=$((TOTAL_WARNINGS + NUM_WARNINGS))
+
+              # Merge bugs into ALL_BUGS
+              ALL_BUGS=$(echo "$ALL_BUGS" "$BUGS" | python3 -c "
+          import sys, json
+          parts = sys.stdin.read().split(']')
+          all_bugs = []
+          for part in parts:
+              part = part.strip()
+              if part:
+                  if not part.startswith('['):
+                      part = '[' + part
+                  if not part.endswith(']'):
+                      part = part + ']'
+                  try:
+                      all_bugs.extend(json.loads(part))
+                  except:
+                      pass
+          print(json.dumps(all_bugs))
+          ")
+            fi
+          done <<< "${{ steps.changed-files.outputs.files }}"
+
+          # Create final JSON report
+          python3 -c "
+          import json
+          bugs = json.loads('$ALL_BUGS')
+          report = {
+              'summary': {
+                  'files_analyzed': $FILES_ANALYZED,
+                  'total_errors': $TOTAL_ERRORS,
+                  'total_warnings': $TOTAL_WARNINGS,
+                  'total_issues': $TOTAL_ERRORS + $TOTAL_WARNINGS
+              },
+              'bugs': bugs
+          }
+          with open('analysis_output/bug_report.json', 'w') as f:
+              json.dump(report, f, indent=2)
+          "
+
+          # Set outputs for PR comment
+          echo "total_errors=$TOTAL_ERRORS" >> $GITHUB_OUTPUT
+          echo "total_warnings=$TOTAL_WARNINGS" >> $GITHUB_OUTPUT
+          echo "files_analyzed=$FILES_ANALYZED" >> $GITHUB_OUTPUT
+
+      - name: Create PR Comment
+        if: steps.changed-files.outputs.count != '0'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+
+            // Read the bug report
+            const report = JSON.parse(fs.readFileSync('analysis_output/bug_report.json', 'utf8'));
+
+            // Build markdown comment
+            let comment = '## 🔍 PyTorch Bug Detector Results\n\n';
+
+            const summary = report.summary;
+            comment += `**Files analyzed:** ${summary.files_analyzed}\n`;
+            comment += `**Issues found:** ${summary.total_errors} errors, ${summary.total_warnings} warnings\n\n`;
+
+            if (report.bugs.length === 0) {
+              comment += '✅ **No issues detected!**\n';
+            } else {
+              comment += '### Issues\n\n';
+              comment += '| File | Line | Type | Severity | Message | Suggestion |\n';
+              comment += '|------|------|------|----------|---------|------------|\n';
+
+              for (const bug of report.bugs) {
+                const file = bug.file || 'unknown';
+                const line = bug.line_number || '?';
+                const type = bug.error_type || 'unknown';
+                const severity = bug.severity === 'error' ? '🔴 Error' : '🟡 Warning';
+                const message = (bug.message || '').replace(/\|/g, '\\|').substring(0, 100);
+                const suggestion = (bug.suggestion || '').replace(/\|/g, '\\|').substring(0, 100);
+
+                comment += `| \`${file}\` | ${line} | \`${type}\` | ${severity} | ${message} | ${suggestion} |\n`;
+              }
+
+              comment += '\n---\n\n';
+              comment += '<details>\n<summary>📋 Raw JSON (for LLM tools)</summary>\n\n';
+              comment += '```json\n';
+              comment += JSON.stringify(report, null, 2);
+              comment += '\n```\n</details>\n';
+            }
+
+            comment += '\n\n---\n*🤖 Generated by PyTorch Bug Detector*';
+
+            // Post comment to PR
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });
+
+      - name: Upload Bug Report Artifact
+        if: steps.changed-files.outputs.count != '0'
+        uses: actions/upload-artifact@v4
+        with:
+          name: bug-report
+          path: analysis_output/bug_report.json
+
+      - name: Summary
+        run: |
+          if [ "${{ steps.changed-files.outputs.count }}" = "0" ]; then
+            echo "No Python files changed in this PR"
+          else
+            echo "Analysis complete!"
+            echo "- Files analyzed: ${{ steps.analyze.outputs.files_analyzed }}"
+            echo "- Errors: ${{ steps.analyze.outputs.total_errors }}"
+            echo "- Warnings: ${{ steps.analyze.outputs.total_warnings }}"
+          fi
