@@ -33,6 +33,11 @@ jobs:
       - name: Install Souffle
         run: |
           sudo apt-get update
+          sudo apt-get install -y wget software-properties-common
+          sudo mkdir -p /etc/apt/keyrings
+          wget -qO- "https://souffle-lang.github.io/ppa/souffle-key.public" | sudo tee /etc/apt/keyrings/souffle-archive-keyring.gpg
+          echo "deb [signed-by=/etc/apt/keyrings/souffle-archive-keyring.gpg] https://souffle-lang.github.io/ppa/ubuntu/ stable main" | sudo tee /etc/apt/sources.list.d/souffle.list
+          sudo apt-get update
           sudo apt-get install -y souffle
 
       - name: Install Python dependencies
